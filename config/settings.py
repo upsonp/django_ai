@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 import os
 from pathlib import Path
 from dotenv import load_dotenv
+from ollama import Client
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -32,7 +33,7 @@ load_dotenv()
 
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:4b")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-AGENT_NAME = os.getenv("AGENT_NAME", "Local Work Agent")
+ollama_client = Client(host=OLLAMA_BASE_URL)
 
 ENABLE_THINKING = os.getenv("ENABLE_THINKING", "false").lower() == "true"
 
@@ -131,3 +132,61 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
 STATIC_URL = 'static/'
+
+FORMATTERS = (
+    {
+        "simple": {
+            "format": "{levelname} {asctime:s} {module} {filename} {lineno:d} {funcName} {message}",
+            "style": "{"
+        },
+        "verbose": {
+            "format": "{levelname} {asctime:s} {threadName} {thread:d} {module} {filename} {lineno:d} {name} "
+                      "{funcName} {process:d} {message}",
+            "style": "{"
+        },
+    },
+)
+
+HANDLERS = {
+    "console": {
+        "class": "logging.StreamHandler",
+        "formatter": "simple",
+    },
+    "error_handler": {
+        "class": "concurrent_log_handler.ConcurrentRotatingFileHandler",
+        "filename": f"{BASE_DIR}/logs/error.log",
+        "mode": "a",
+        "encoding": "utf-8",
+        "formatter": "verbose",
+        "backupCount": 5,
+        "maxBytes": 1024 * 1024 * 2  # 2 MB
+    }
+}
+
+LOGGERS = (
+    {
+        "django": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": True,
+        },
+        "django.request": {
+            "handlers": ['error_handler'],
+            "level": "ERROR",
+            "propagate": True,
+        },
+        "ollama": {
+            "handlers": ["console", "error_handler"],
+            "level": "DEBUG",
+            "propagate": False
+        },
+    },
+)
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": FORMATTERS[0],
+    "handlers": HANDLERS,
+    "loggers": LOGGERS[0],
+}

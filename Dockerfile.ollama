@@ -1,0 +1,17 @@
+# Use a stable minimal base
+FROM ubuntu:24.04
+
+# Install required utilities
+RUN apt update
+RUN apt install -y --no-install-recommends ca-certificates curl tar gzip zstd
+
+RUN curl -fsSL https://ollama.com/install.sh | sh
+
+# Expose the typical Ollama listening port (adjust if the server uses a different port)
+EXPOSE 11434
+
+VOLUME ["/root/.ollama"]
+
+# Default command: run the Ollama server listening on 0.0.0.0:11434
+# Adjust arguments if necessary for the version you downloaded.
+ENTRYPOINT ["ollama", "serve"]

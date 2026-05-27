@@ -1,3 +1,10 @@
+# project folders
+ollama_data/*
+!ollama_data/.gitkeep
+
+logs/*
+!logs/.gitkeep
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
