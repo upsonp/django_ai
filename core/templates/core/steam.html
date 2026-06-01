@@ -1,0 +1,112 @@
+{% extends 'base.html' %}
+
+{% partialdef ai_model %}
+    <hx-partial id="h1_id_model_name">
+        {% if agent_changed %}
+            <span hx-post="{% url "core:clear_agent_history" %}" hx-trigger="load">
+            {{ model }}
+            </span>
+        {% else %}
+            {{ model }}
+        {% endif %}
+    </hx-partial>
+{% endpartialdef %}
+
+{% partialdef post_msg %}
+    <hx-partial id="div_id_content_stream" hx-swap="beforeend scroll:bottom">
+        {% for message in messages %}
+            <div class="d-flex mb-2">
+                <div class="card bg-light ms-4 mb-2 p-2">{{ message.html|safe }}</div>
+            </div>
+        {% endfor %}
+    </hx-partial>
+{% endpartialdef %}
+
+{% block content %}
+    <h1 id="h1_id_model_name">{{ model }}</h1>
+    <form>
+        <textarea name="chat_message" class="form-control" rows="5"></textarea>
+        <div class="row mt-2">
+            <div class="col-auto">
+                <button type="button" class="btn btn-secondary"
+                        hx-post="{% url "core:start_stream" %}"
+                        hx-indicator=".htmx-indicator"
+                ><span class="bi bi-check-square me-2"></span> Submit
+                </button>
+            </div>
+            <div class="col-auto">
+                <button type="button" class="btn btn-danger"
+                        hx-post="{% url "core:clear_history" %}"
+                ><span class="bi bi-trash me-2"></span> Clear
+                </button>
+            </div>
+        </div>
+    </form>
+
+    <div id="div_id_chat_content">
+        <div class="card mt-2">
+            <div class="card-header p-2">
+                <ul class="nav nav-tabs card-header-tabs" id="chatTabs" role="tablist">
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link active" id="tab-chat" data-bs-toggle="tab" data-bs-target="#pane-chat"
+                                type="button" role="tab" aria-controls="pane-chat" aria-selected="true">
+                            <span class="row">
+                                <span class="col">Chat</span>
+                                <span class="col-auto" id="div_id_content_stream_spinner"></span>
+                            </span>
+                        </button>
+                    </li>
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link" id="tab-thinking" data-bs-toggle="tab" data-bs-target="#pane-thinking"
+                                type="button" role="tab" aria-controls="pane-thinking" aria-selected="false">
+                            <span class="row">
+                                <span class="col">Thinking</span>
+                                <span class="col-auto" id="div_id_thinking_stream_spinner"></span>
+                            </span>
+                        </button>
+                    </li>
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link" id="tab-history" data-bs-toggle="tab" data-bs-target="#pane-history"
+                                type="button" role="tab" aria-controls="pane-history" aria-selected="false">
+                            <span class="row">
+                                <span class="col">History</span>
+                                <span class="col-auto" id="div_id_history_stream_spinner"></span>
+                            </span>
+                        </button>
+                    </li>
+                </ul>
+            </div>
+            <div class="card-body">
+                <div class="tab-content" id="chatTabsContent">
+                    <!-- Chat pane (active by default) -->
+                    <div class="tab-pane fade show active" id="pane-chat" role="tabpanel" aria-labelledby="tab-chat">
+                        <div id="div_id_content_stream" class="mt-1 overflow-auto" style="max-height: 400px;">
+                            {% for message in messages %}
+                                {% if message.role == "user" %}
+                                    <div class="card bg-light ms-4 mb-2 p-2">
+                                        {{ message.html|safe }}
+                                    </div>
+                                {% else %}
+                                    {{ message.html|safe }}
+                                {% endif %}
+                            {% endfor %}
+                        </div>
+                    </div>
+                    <div class="tab-pane fade" id="pane-thinking" role="tabpanel" aria-labelledby="tab-thinking">
+                        <div id="div_id_thinking_stream" class="mt-1 overflow-auto" style="max-height: 400px;">
+                            {% for thought in thinking %}
+                                {{ thought.html|safe }}
+                            {% endfor %}
+                        </div>
+                    </div>
+                    <div class="tab-pane fade" id="pane-history" role="tabpanel" aria-labelledby="tab-history">
+                        <div id="div_id_history_stream" class="mt-1 overflow-auto" style="max-height: 400px;">
+                            {% for his in history %}
+                                {{ his|safe }}
+                            {% endfor %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+{% endblock %}

@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 import os
 from pathlib import Path
 from dotenv import load_dotenv
+from langchain_ollama import ChatOllama
 from ollama import Client
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -31,9 +32,13 @@ ALLOWED_HOSTS = []
 
 load_dotenv()
 
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:4b")
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-ollama_client = Client(host=OLLAMA_BASE_URL)
+AGENT_URL: str = os.getenv('OLLAMA_HOST', 'localhost:11434')
+OLLAMA_MODEL: str = str(os.getenv('OLLAMA_MODEL', 'qwen3.5:0.8b'))
+ENABLE_THINKING: bool = os.getenv('ENABLE_THINKING', "False") == "True"
+OLLAMA_CLIENT = ChatOllama(base_url=AGENT_URL,
+                           reasoning=ENABLE_THINKING,
+                           model=OLLAMA_MODEL)
+SINGLE_AGENT = None
 
 ENABLE_THINKING = os.getenv("ENABLE_THINKING", "false").lower() == "true"
 

@@ -1,8 +1,8 @@
 # core/urls.py
 from django.urls import path
-from . import views
+from . import stream_views
 
 app_name = 'core'  # optional but recommended
 
 urlpatterns = [
-] + views.urlpatterns
+] + stream_views.urlpatterns
