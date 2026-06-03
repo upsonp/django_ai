@@ -1,0 +1,19 @@
+sequenceDiagram
+  participant Browser as User Browser
+  participant Server as Django Web Server
+  participant LangChain as Langchain Agent
+  participant Ollama as Ollama Server (hosting A.I Model)
+
+  Browser->>Server: POST /stream/start (user prompt)
+  Server->>LangChain: get_agent(prompt).bind_tools(agent, tool_list)
+  LangChain->>Ollama: API request: user prompt
+  Ollama->>Ollama: model interpretation of user prompt
+  alt Tool needed
+    Ollama-->>LangChain: RUN: tool_name, ARGS: tool_args0
+    LangChain-->>LangChain: call tool (e.g., ls_directory(root="/"))
+    LangChain-->>Ollama: tool result
+  end
+  Ollama->>Ollama: model interpretation tool call
+  Ollama->>LangChain: model response (answer)
+  LangChain->>Server: model response (answer)
+  Server->>Browser: Stream response (SSE/WebSocket)

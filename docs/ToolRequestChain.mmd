@@ -1,0 +1,39 @@
+# AI Request Sequence
+
+Below is a sequence diagram showing a user's browser request flowing through a web server, a LangChain agent (which may call tools), and an Ollama server hosting the AI model.
+
+```mermaid
+sequenceDiagram
+	participant Browser as User Browser
+	participant Server as Web Server
+	participant LangChain as LangChain Agent
+	participant Tools as External Tools
+	participant Ollama as Ollama Server (AI Model)
+
+	Browser->>Server: POST /api/ai-request (input + metadata)
+	Server->>LangChain: build_prompt(input) + tool_descriptions
+	alt Tool needed
+		LangChain->>Tools: call tool (e.g., search, DB)
+		Tools-->>LangChain: tool result
+	end
+	LangChain->>Ollama: model.invoke(prompt + tool_results)
+	loop Streaming tokens
+		Ollama-->>LangChain: token chunk (stream)
+		LangChain-->>Server: forward stream (SSE/WebSocket)
+		Server-->>Browser: stream tokens
+	end
+	Ollama-->>LangChain: final response
+	LangChain-->>Server: structured response (answer + citations)
+	Server-->>Browser: 200 OK (answer)
+
+	alt Error path
+		Ollama-->>LangChain: error
+		LangChain-->>Server: error payload
+		Server-->>Browser: 5xx / error JSON
+	end
+```
+
+Notes:
+- LangChain can orchestrate tool calls before or during model calls (tool usage shown in the "Tool needed" branch).
+- Streaming shows token chunks flowing from Ollama through LangChain and the server to the browser (SSE/WebSocket).
+

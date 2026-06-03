@@ -35,16 +35,20 @@ SYSTEM_BLOCK_RE = re.compile(r'SYSTEM\s*"""\s*(.*?)\s*"""', re.DOTALL | re.IGNOR
 
 def get_agent_tools() -> list[Callable]:
     return [
-        directories.ls_directories, directories.ls_files, directories.ls_recursive_list, directories.read_text_file
+        directories.list_missions, directories.list_mission_directories, directories.list_mission_files
     ]
 
 def get_agent():
+    SYSTEM_MSG = """
+        You are an oceanographic research assistant. Our goal is to discover data with in mission directories, identify mission names, events, sensor data (.btl), and sample data and produce a report on what we find."
+    """
     base_model = settings.OLLAMA_CLIENT
     kwargs = {
         "model": base_model,
         "tools": get_agent_tools(),
         "checkpointer": memory,
-        "middleware": [AgentErrorLogger()]
+        "middleware": [AgentErrorLogger()],
+        "system_prompt": SYSTEM_MSG
     }
     if settings.SINGLE_AGENT is None:
         settings.SINGLE_AGENT = create_agent(**kwargs)

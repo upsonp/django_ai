@@ -1,9 +1,11 @@
 import collections
 import inspect
 import json
+import time
 import uuid
 
 import bleach
+from bs4 import BeautifulSoup
 from django.http import StreamingHttpResponse, HttpResponse
 from django.shortcuts import render
 from django.template.loader import render_to_string
@@ -33,7 +35,8 @@ def check_model(agent_changed=False):
 
 # You can customize allowed tags/attributes as needed
 ALLOWED_TAGS = set(bleach.sanitizer.ALLOWED_TAGS) | {
-    'p', 'pre', 'code', 'span', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'br', 'hr', 'img'
+    'p', 'pre', 'code', 'span', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'br', 'hr', 'img',
+    'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td', 'caption', 'col', 'colgroup'
 }
 ALLOWED_ATTRIBUTES = {
     **bleach.sanitizer.ALLOWED_ATTRIBUTES,
@@ -41,17 +44,21 @@ ALLOWED_ATTRIBUTES = {
     'img': ['src', 'alt', 'title', 'width', 'height'],
     'code': ['class'],
     'span': ['class'],
+    # table-specific attributes that are commonly generated or useful
+    'table': ['class', 'border', 'cellpadding', 'cellspacing', 'summary'],
+    'th': ['colspan', 'rowspan', 'scope', 'class', 'align'],
+    'td': ['colspan', 'rowspan', 'class', 'align'],
+    'caption': ['class'],
+    'col': ['span', 'class'],
+    'colgroup': ['class'],
 }
 
-MAX_HISTORY_MESSAGES = 20
-THINKING_TARGET = "div_id_thinking_stream"
-CONTENT_TARGET = "div_id_content_stream"
-HISTORY_TARGET = "div_id_history_stream"
 MESSAGE_SPACER = "<p>=========================================================================================</p>"
 
 
 def _clean_message(string_buffer: str):
-    html = markdown(string_buffer, extensions=['extra', 'codehilite', 'sane_lists'])
+    html = markdown(string_buffer, extensions=['extra', 'codehilite', 'sane_lists', 'tables'])
+
     # Sanitize the HTML to avoid XSS
     clean_thinking_html = bleach.clean(
         html,
@@ -59,17 +66,23 @@ def _clean_message(string_buffer: str):
         attributes=ALLOWED_ATTRIBUTES,
         strip=True
     )
+
+    # Post-process HTML to add CSS classes automatically
+    soup = BeautifulSoup(clean_thinking_html, "html.parser")
+
+    # Example: add bootstrap-like classes to all tables
+    for table in soup.find_all("table"):
+        classes = table.get("class", [])
+        # ensure we don't duplicate classes
+        for cls in ("table", "table-striped"):
+            if cls not in classes:
+                classes.append(cls)
+        table['class'] = classes
     # '\n' have to be removed if this is to be sent as an SSE event
     # which must have the format "data: [something to send]\n\n"
     # if there are any '\n\n' in the message it won't work.
     html = clean_thinking_html.replace('\n', '')
     return html
-
-
-def _clean_response(string_buffer: str, target: str, scroll: bool = True):
-    html = _clean_message(string_buffer)
-    return f'<hx-partial hx-target="#{target}" hx-swap="beforeend{" scroll:bottom" if scroll else ""}">{html}</hx-partial>'
-
 
 def get_history(request, agent):
     thread = get_thread()
@@ -83,170 +96,243 @@ def get_history(request, agent):
     return state.values.get("messages", [])
 
 
-def _process_chunk(stream, target, max_buffer_size=16_384):
-    """
-    Process an iterable `stream` of chunks and yield SSE 'data: ...\n\n' entries.
-    This function:
-    - coerces non-string chunks to str/json safely,
-    - splits chunks by newline(s) and flushes appropriately,
-    - guards against endlessly growing buffers by flushing if buffer grows too large.
-    """
-    chunk_buf = ""
-    # If the stream is a single string (common), allow it to be processed as an iterable of one.
-    if isinstance(stream, str):
-        iterable = (stream,)
-    elif isinstance(stream, collections.abc.Iterator) and not isinstance(stream, collections.abc.Sequence):
-        iterable = stream
-    else:
-        # Accept lists, tuples, generators equally
-        iterable = stream
+def _stream_output(target, message, swap="beforeend scroll:bottom"):
+    return f"<hx-partial hx-target=\"#div_id_{target}\" hx-swap=\"{swap}\">{message}</hx-partial>"
 
-    for chunk in iterable:
-        try:
-            if chunk is None:
-                continue
-            # Normalize chunk to string
-            if not isinstance(chunk, str):
-                try:
-                    # For dict/list-like chunks, prefer compact JSON
-                    if isinstance(chunk, (dict, list)):
-                        chunk = json.dumps(chunk, separators=(',', ':'), ensure_ascii=False)
-                    else:
-                        chunk = str(chunk)
-                except Exception:
-                    chunk = str(chunk)
-
-            # If chunk contains one or more newlines, flush every complete line
-            if '\n' in chunk:
-                parts = chunk.split('\n')
-                # flush first line as continuation of buffer
-                chunk_buf += parts[0]
-                if chunk_buf:
-                    yield f'data: {_clean_response(chunk_buf, target)}\n\n'
-                # flush intermediate complete lines
-                for mid in parts[1:-1]:
-                    if mid:
-                        yield f'data: {_clean_response(mid, target)}\n\n'
-                # start new buffer with the last (possibly partial) segment
-                chunk_buf = parts[-1]
-            else:
-                chunk_buf += chunk
-
-            # guard: flush if buffer grows too large (avoids memory blowup)
-            if len(chunk_buf) > max_buffer_size:
-                yield f'data: {_clean_response(chunk_buf, target)}\n\n'
-                chunk_buf = ""
-        except Exception:
-            logger.exception("Error processing chunk for target=%s", target)
-            # continue to next chunk instead of stopping the whole stream
-            continue
-
-    # flush remainder
-    if chunk_buf:
-        try:
-            yield f'data: {_clean_response(chunk_buf, target)}\n\n'
-        except Exception:
-            logger.exception("Error flushing final buffer for target=%s", target)
-
-
-def _client_stream(stream):
-    html = render_to_string('core/partials/spinner.html').replace('\n', '')
-
-    yield f'data: <hx-partial hx-target="#{HISTORY_TARGET}_spinner" hx-swap="innerHTML">{html}</hx-partial>\n\n'
-    yield f'data: <hx-partial hx-target="#{THINKING_TARGET}_spinner" hx-swap="innerHTML">{html}</hx-partial>\n\n'
-    msg_update_url = reverse_lazy("core:post_message")
-    yield f'data: <hx-partial hx-target="#{CONTENT_TARGET}_spinner" hx-swap="innerHTML"><span hx-get="{msg_update_url}" hx-trigger="load"></span>{html}</hx-partial>\n\n'
-
-    logger.info("Streaming reasoning/messages, list tool calls")
-    message_id = None
-    is_thinking = False
+def _stream_interleave(stream):
     for name, item in stream.interleave("messages", "tool_calls"):
         try:
             if name == "messages":
-                if item.message_id != message_id:
-                    message_id = item.message_id
-                    logger.info(f"message id updated {message_id}")
-
                 if hasattr(item, 'reasoning'):
-                    yield from _process_chunk(item.reasoning, THINKING_TARGET)
+                    think_buf = ""
+                    tag = "thinking"
+                    for chunk in item.reasoning:
+                        think_buf += chunk if chunk else ""
+                        yield f'data: {_stream_output(f"{tag}_stream", chunk.replace('\n', '<br>'))}\n\n'
+
+                    if item.done:
+                        yield f'data: {_stream_output(f"{tag}_content", _clean_message(think_buf))}\n\n'
+                        yield f'data: {_stream_output(f"{tag}_content", MESSAGE_SPACER)}\n\n'
+                        yield f'data: {_stream_output(f"{tag}_stream", "", "innerHTML")}\n\n'
+                        thinking_buf = ""
+
                 if hasattr(item, 'text'):
-                    yield from _process_chunk(item.text, CONTENT_TARGET)
+                    text_buf = ""
+                    tag = "text"
+                    for chunk in item.text:
+                        text_buf += chunk if chunk else ""
+                        yield f'data: {_stream_output(f"{tag}_stream", chunk.replace('\n', '<br>'))}\n\n'
+
+                    if item.done:
+                        yield f'data: {_stream_output(f"{tag}_content", _clean_message(text_buf))}\n\n'
+                        yield f'data: {_stream_output(f"{tag}_content", MESSAGE_SPACER)}\n\n'
+                        yield f'data: {_stream_output(f"{tag}_stream", "", "innerHTML")}\n\n'
+                        text_buf = ""
+
             elif name == "tool_calls":
                 if item.error:
                     logger.error("Tool %s failed: %s", item.tool_name, item.error)
-                    yield f"data: {_clean_response(f'<p>Error in tool: {str(item.error).replace('\\n', '')}</p>', THINKING_TARGET)}\n\n"
+                    yield f"data: {_stream_output("thinking_content", _clean_message(f'<p>Error in tool: {str(item.error).replace('\\n', '')}</p>'))}\n\n"
                     continue
 
                 # announce the tool call (protected)
                 try:
-                    yield f"data: {_clean_response(f'<p> &gt;&gt; Calling tool: <code>{item.tool_name}({item.input})</code></p>', THINKING_TARGET)}\n\n"
+                    message = _clean_message(f'<p> &gt;&gt; Calling tool: <code>{item.tool_name}({item.input})</code></p>')
+                    yield f"data: {_stream_output("thinking_content", message)}\n\n"
                 except Exception:
                     logger.exception("Failed to format tool call announcement for %s", getattr(item, "tool_name", "<unknown>"))
                     # best-effort fallback announcement
                     tool_name_id = getattr(item, "tool_name", "<unknown>")
-                    yield f"data: {_clean_response(f'<p> &gt;&gt; Calling tool: {tool_name_id}</p>', THINKING_TARGET)}\n\n"
+                    message = f'<p> &gt;&gt; Calling tool: {tool_name_id}</p>'
+                    yield f"data: {_stream_output("thinking_content", message)}\n\n"
+                    yield f"data: {_stream_output("text_content", message)}\n\n"
 
-                out_deltas = getattr(item, "output_deltas", None)
-                logger.debug("Tool %s output_deltas: type=%s repr=%s", item.tool_name, type(out_deltas), repr(out_deltas)[:400])
-
-                # nothing to stream
-                if out_deltas is None:
-                    continue
-
-                # handle concrete sequences quickly
-                if isinstance(out_deltas, (list, tuple)):
-                    try:
-                        yield from _process_chunk(out_deltas, THINKING_TARGET)
-                    except Exception:
-                        logger.exception("Error processing list output_deltas for tool %s", item.tool_name)
-                        yield f"data: {_clean_response(f'<p>Tool {item.tool_name} produced output that could not be processed.</p>', THINKING_TARGET)}\n\n"
-                    continue
-
-                # detect async outputs
-                if inspect.isasyncgen(out_deltas) or inspect.iscoroutine(out_deltas):
-                    logger.warning("Tool %s returned async output; synchronous streaming not supported", item.tool_name)
-                    yield f"data: {_clean_response(f'<p>Tool {item.tool_name} returned asynchronous output. Cannot stream it here.</p>', THINKING_TARGET)}\n\n"
-                    continue
-
-                # try to iterate safely (generators / iterables / single values)
-                try:
-                    iterator = iter(out_deltas)
-                except TypeError:
-                    # single non-iterable: process as a single chunk
-                    yield from _process_chunk((out_deltas,), THINKING_TARGET)
-                    continue
-
-                # iterate generator/iterator with logging + max guard
-                max_items = 10000
-                count = 0
-                try:
-                    for delta in iterator:
-                        count += 1
-                        logger.debug("Tool %s delta #%d type=%s repr=%s", item.tool_name, count, type(delta), repr(delta)[:300])
-                        # process each delta as its own chunk (keeps buffering predictable)
-                        yield from _process_chunk((delta,), THINKING_TARGET)
-
-                        # heartbeat to keep connection/proxies alive
-                        if (count % 10) == 0:
-                            yield f"data: {_clean_response('', THINKING_TARGET)}\n\n"
-
-                        if count >= max_items:
-                            logger.warning("Tool %s produced more than %d deltas; truncating", item.tool_name, max_items)
-                            yield f"data: {_clean_response(f'<p>Tool {item.tool_name} produced too many messages; truncating.</p>', THINKING_TARGET)}\n\n"
-                            break
-                except Exception:
-                    logger.exception("Exception while iterating output_deltas for tool %s", item.tool_name)
-                    yield f"data: {_clean_response(f'<p>Tool {item.tool_name} streaming failed while iterating its output.</p>', THINKING_TARGET)}\n\n"
         except Exception as ex:
             logger.exception(ex)
             continue
 
-    yield f'data: <hx-partial hx-target="#{CONTENT_TARGET}" hx-swap="beforeend">{MESSAGE_SPACER}</hx-partial>\n\n'
-    yield f'data: <hx-partial hx-target="#{THINKING_TARGET}" hx-swap="beforeend">{MESSAGE_SPACER}</hx-partial>\n\n'
 
-    yield f'data: <hx-partial hx-target="#{HISTORY_TARGET}_spinner" hx-swap="innerHTML scroll:bottom"></hx-partial>\n\n'
-    yield f'data: <hx-partial hx-target="#{THINKING_TARGET}_spinner" hx-swap="innerHTML scroll:bottom"></hx-partial>\n\n'
-    yield f'data: <hx-partial hx-target="#{CONTENT_TARGET}_spinner" hx-swap="innerHTML scroll:bottom"></hx-partial>\n\n'
+def _flush_buffer(tag, buffer):
+    yield f'data: {_stream_output(f"{tag}_content", _clean_message(buffer))}\n\n'
+    yield f'data: {_stream_output(f"{tag}_content", MESSAGE_SPACER)}\n\n'
+    yield f'data: {_stream_output(f"{tag}_stream", "", "innerHTML")}\n\n'
+
+
+def _async_to_sync(async_iter, max_queue_size=1000):
+    """
+    Run an async generator in a background thread and yield items synchronously.
+    Stops when the async generator finishes or raises.
+    """
+    q: "queue.Queue" = queue.Queue(maxsize=max_queue_size)
+    sentinel = object()
+
+    async def runner():
+        try:
+            async for item in async_iter:
+                q.put(item)
+        except Exception as e:
+            # Put exception to queue to raise it in consumer
+            q.put(e)
+        finally:
+            q.put(sentinel)
+
+    def run_loop():
+        try:
+            asyncio.run(runner())
+        except Exception as e:
+            # If the runner fails to start, ensure the consumer gets something
+            q.put(e)
+            q.put(sentinel)
+
+    t = threading.Thread(target=run_loop, daemon=True)
+    t.start()
+
+    while True:
+        item = q.get()
+        if item is sentinel:
+            break
+        if isinstance(item, Exception):
+            # re-raise in consumer context
+            raise item
+        yield item
+
+
+def _stream_raw(stream):
+    text_buf = ""
+    thinking_buf = ""
+
+    logger.info("Starting _stream_raw; stream repr=%r type=%s is_async=%s is_gen=%s has_interleave=%s",
+                stream, type(stream), inspect.isasyncgen(stream), inspect.isgenerator(stream),
+                hasattr(stream, "interleave"))
+
+    if inspect.isasyncgen(stream):
+        logger.info("Detected async generator, wrapping with _async_to_sync")
+        stream = _async_to_sync(stream)
+
+    iterator = iter(stream)
+    while True:
+        # Catch errors raised when advancing the iterator (these were
+        # previously uncaught and can terminate the generator unexpectedly)
+        try:
+            event = next(iterator)
+        except StopIteration:
+            if thinking_buf:
+                yield from _flush_buffer("thinking", thinking_buf)
+                thinking_buf = ""
+            if text_buf:
+                yield from _flush_buffer("text", text_buf)
+                text_buf = ""
+            logger.info("End of stream")
+            break
+        except Exception as e:
+            # Iterator raised an unexpected exception (connection/library/agent error)
+            logger.exception("Stream iterator raised an exception; stopping stream")
+            # Notify client of the error via SSE (best-effort)
+            try:
+                err_html = _clean_message(f'<p><strong>Stream error:</strong> {str(e)}</p>')
+            except Exception:
+                err_html = '<p><strong>Stream error</strong></p>'
+            yield f'data: {_stream_output("text_content", err_html)}\n\n'
+
+            # Flush buffered partial content so client sees what was built so far
+            if thinking_buf:
+                try:
+                    yield from _flush_buffer("thinking", thinking_buf)
+                except Exception:
+                    logger.exception("Failed to flush thinking buffer after iterator error")
+                thinking_buf = ""
+            if text_buf:
+                try:
+                    yield from _flush_buffer("text", text_buf)
+                except Exception:
+                    logger.exception("Failed to flush text buffer after iterator error")
+                text_buf = ""
+            break
+
+        # Process each event, but still protect the processing itself
+        try:
+            if not isinstance(event, dict):
+                logger.debug("Skipping non-dict event: %r", event)
+                continue
+
+            method = event.get("method")
+            if method == "tools":
+                params = event.get("params", {})
+                data = params.get("data", {})
+                if data.get("event") == "tool-started":
+                    tool_name = data.get("tool_name")
+                    tool_args = data.get("input")
+                    message = _clean_message(
+                        f'<p> &gt;&gt; Calling tool: <code>{tool_name}({str(tool_args)})</code></p>')
+                    yield f"data: {_stream_output('thinking_content', message)}\n\n"
+                    yield f'data: {_stream_output("thinking_content", MESSAGE_SPACER)}\n\n'
+                    yield f"data: {_stream_output('text_content', message)}\n\n"
+                    yield f'data: {_stream_output("text_content", MESSAGE_SPACER)}\n\n'
+                continue
+
+            if method != "messages":
+                logger.info("Event method: %s", method)
+                continue
+
+            data_list = event.get("params", {}).get("data", [])
+            if data_list == []:
+                # diagnostic: give the producer a short chance to supply data
+                logger.debug("Received empty data_list; sleeping briefly before continue")
+                time.sleep(0.05)  # 50ms; tune or remove after debugging
+                # attempt to fetch again if event supports it (best-effort)
+                # but most streams will provide proper events — we keep a simple continue here
+                continue
+
+            data = data_list[0]
+            if not isinstance(data, dict):
+                continue
+
+            event_type = data.get("event")
+            if event_type == "content-block-delta":
+                block = data.get("delta") or {}
+
+                if block.get("type") == "reasoning-delta":
+                    chunk = block.get("reasoning", "") or ""
+                    thinking_buf += chunk
+                    yield f'data: {_stream_output(f"thinking_stream", chunk.replace(chr(10), "<br>"))}\n\n'
+
+                elif block.get("type") == "text-delta":
+                    chunk = block.get("text", "") or ""
+                    text_buf += chunk
+                    yield f'data: {_stream_output(f"text_stream", chunk.replace(chr(10), "<br>"))}\n\n'
+                continue
+            elif event_type == "message-finish":
+                logger.info("Block type: %s", event_type)
+                if thinking_buf:
+                    yield from _flush_buffer("thinking", thinking_buf)
+                    thinking_buf = ""
+                if text_buf:
+                    yield from _flush_buffer("text", text_buf)
+                    text_buf = ""
+
+                continue
+            else:
+                logger.info("Block type: %s", event_type)
+
+        except Exception:
+            logger.exception("Error processing stream event: %r", event)
+            # continue to next event
+            continue
+
+def _client_stream(stream):
+    html = render_to_string('core/partials/spinner.html').replace('\n', '')
+
+    yield f'data: <hx-partial hx-target="#div_id_history_spinner" hx-swap="innerHTML">{html}</hx-partial>\n\n'
+    yield f'data: <hx-partial hx-target="#div_id_thinking_spinner" hx-swap="innerHTML">{html}</hx-partial>\n\n'
+    msg_update_url = reverse_lazy("core:post_message")
+    yield f'data: <hx-partial hx-target="#div_id_text_spinner" hx-swap="innerHTML"><span hx-get="{msg_update_url}" hx-trigger="load"></span>{html}</hx-partial>\n\n'
+
+    logger.info("Streaming reasoning/messages, list tool calls")
+    yield from _stream_raw(stream)
+
+    yield f'data: <hx-partial hx-target="#div_id_history_spinner" hx-swap="innerHTML"></hx-partial>\n\n'
+    yield f'data: <hx-partial hx-target="#div_id_thinking_spinner" hx-swap="innerHTML"></hx-partial>\n\n'
+    yield f'data: <hx-partial hx-target="#div_id_text_spinner" hx-swap="innerHTML"></hx-partial>\n\n'
 
 def _process_content_message_history(request):
     unprocessed_messages = [msg.content for msg in get_history(request, get_agent()) if (type(msg) is HumanMessage or type(msg) is AIMessage)]
@@ -300,28 +386,21 @@ def clear_history(request):
     # Explicitly clear the state
     try:
         # Let the agent/library pick the appropriate node automatically.
-        get_agent().update_state(config, {"messages": []}, as_node="agent")
+        get_agent().checkpointer.delete_thread(get_thread().thread_id)
         logger.info("Cleared agent messages for thread %s", thread.thread_id)
     except InvalidUpdateError as ex:
         # Log full exception for debugging
         logger.exception("Failed to clear agent history: %s", ex)
 
-    html = f'<hx-partial hx-target="#{THINKING_TARGET}" hx-swap="innerHTML scroll:bottom"></hx-partial>'
-    html += f'<hx-partial hx-target="#{CONTENT_TARGET}" hx-swap="innerHTML scroll:bottom"></hx-partial>'
-    html += f'<hx-partial hx-target="#{HISTORY_TARGET}" hx-swap="innerHTML scroll:bottom"></hx-partial>'
+    html = f'<hx-partial hx-target="#div_id_thinking_content" hx-swap="innerHTML scroll:bottom"></hx-partial>'
+    html += f'<hx-partial hx-target="#div_id_text_content" hx-swap="innerHTML scroll:bottom"></hx-partial>'
+    html += f'<hx-partial hx-target="#div_id_histroy_content" hx-swap="innerHTML scroll:bottom"></hx-partial>'
 
     return HttpResponse(html)
 
 
 def clear_agent_history(request):
-
-    def chat_update():
-
-        his_msg = ""
-        yield f'data: <hx-partial hx-target="#{THINKING_TARGET}" hx-swap="innerHTML scroll:bottom"></hx-partial>\n\n'
-        yield f"data: {_clean_response(his_msg, HISTORY_TARGET)}\n\n"
-
-    return StreamingHttpResponse(chat_update(), content_type="text/event-stream")
+    return HttpResponse("Not implemented")
 
 
 def post_message(request):

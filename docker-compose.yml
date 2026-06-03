@@ -17,6 +17,6 @@ services:
     entrypoint: >
       sh -c "until curl -s http://ollama:11434/health >/dev/null 2>&1; do echo 'waiting for ollama...'; sleep 1; done;
              echo 'running ollama run...';
-             ollama run qwen3.5:0.8b 'Hello, world' --hidethinking;
+             ollama run qwen3.5:2b 'Hello, world' --hidethinking;
              echo 'done.'"
     restart: "no"

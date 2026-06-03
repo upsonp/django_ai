@@ -26,7 +26,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = 'django-insecure--)oe7++qv%ab-&ze^k7gsaugbj_@qnd@l(&_*y6&86p*2-5e)t'
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.getenv('DEBUG', 'True') == 'True'
 
 ALLOWED_HOSTS = []
 
@@ -41,6 +41,7 @@ OLLAMA_CLIENT = ChatOllama(base_url=AGENT_URL,
 SINGLE_AGENT = None
 
 ENABLE_THINKING = os.getenv("ENABLE_THINKING", "false").lower() == "true"
+MEDIA_IN = os.getenv("MEDIA_IN", Path(BASE_DIR, "media"))
 
 # Application definition
 

@@ -13,7 +13,7 @@
 {% endpartialdef %}
 
 {% partialdef post_msg %}
-    <hx-partial id="div_id_content_stream" hx-swap="beforeend scroll:bottom">
+    <hx-partial id="div_id_text_content" hx-swap="beforeend scroll:bottom">
         {% for message in messages %}
             <div class="d-flex mb-2">
                 <div class="card bg-light ms-4 mb-2 p-2">{{ message.html|safe }}</div>
@@ -52,7 +52,7 @@
                                 type="button" role="tab" aria-controls="pane-chat" aria-selected="true">
                             <span class="row">
                                 <span class="col">Chat</span>
-                                <span class="col-auto" id="div_id_content_stream_spinner"></span>
+                                <span class="col-auto" id="div_id_text_spinner"></span>
                             </span>
                         </button>
                     </li>
@@ -61,7 +61,7 @@
                                 type="button" role="tab" aria-controls="pane-thinking" aria-selected="false">
                             <span class="row">
                                 <span class="col">Thinking</span>
-                                <span class="col-auto" id="div_id_thinking_stream_spinner"></span>
+                                <span class="col-auto" id="div_id_thinking_spinner"></span>
                             </span>
                         </button>
                     </li>
@@ -70,7 +70,7 @@
                                 type="button" role="tab" aria-controls="pane-history" aria-selected="false">
                             <span class="row">
                                 <span class="col">History</span>
-                                <span class="col-auto" id="div_id_history_stream_spinner"></span>
+                                <span class="col-auto" id="div_id_history_spinner"></span>
                             </span>
                         </button>
                     </li>
@@ -80,30 +80,39 @@
                 <div class="tab-content" id="chatTabsContent">
                     <!-- Chat pane (active by default) -->
                     <div class="tab-pane fade show active" id="pane-chat" role="tabpanel" aria-labelledby="tab-chat">
-                        <div id="div_id_content_stream" class="mt-1 overflow-auto" style="max-height: 400px;">
-                            {% for message in messages %}
-                                {% if message.role == "user" %}
-                                    <div class="card bg-light ms-4 mb-2 p-2">
+                        <div class="mt-1 overflow-auto" style="max-height: 400px;">
+                            <div id="div_id_text_content" >
+                                {% for message in messages %}
+                                    {% if message.role == "user" %}
+                                        <div class="card bg-light ms-4 mb-2 p-2">
+                                            {{ message.html|safe }}
+                                        </div>
+                                    {% else %}
                                         {{ message.html|safe }}
-                                    </div>
-                                {% else %}
-                                    {{ message.html|safe }}
-                                {% endif %}
-                            {% endfor %}
+                                    {% endif %}
+                                {% endfor %}
+                            </div>
+                            <div id="div_id_text_stream"></div>
                         </div>
                     </div>
                     <div class="tab-pane fade" id="pane-thinking" role="tabpanel" aria-labelledby="tab-thinking">
-                        <div id="div_id_thinking_stream" class="mt-1 overflow-auto" style="max-height: 400px;">
-                            {% for thought in thinking %}
-                                {{ thought.html|safe }}
-                            {% endfor %}
+                        <div class="mt-1 overflow-auto" style="max-height: 400px;">
+                            <div id="div_id_thinking_content">
+                                {% for thought in thinking %}
+                                    {{ thought.html|safe }}
+                                {% endfor %}
+                            </div>
+                            <div id="div_id_thinking_stream"></div>
                         </div>
                     </div>
                     <div class="tab-pane fade" id="pane-history" role="tabpanel" aria-labelledby="tab-history">
-                        <div id="div_id_history_stream" class="mt-1 overflow-auto" style="max-height: 400px;">
-                            {% for his in history %}
-                                {{ his|safe }}
-                            {% endfor %}
+                        <div class="mt-1 overflow-auto" style="max-height: 400px;">
+                            <div id="div_id_history_content">
+                                {% for his in history %}
+                                    {{ his|safe }}
+                                {% endfor %}
+                            </div>
+                            <div id="div_id_history_stream"></div>
                         </div>
                     </div>
                 </div>
