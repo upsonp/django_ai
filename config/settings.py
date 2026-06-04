@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 from langchain_ollama import ChatOllama
+from langgraph.checkpoint.memory import MemorySaver
 from ollama import Client
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -34,15 +35,17 @@ load_dotenv()
 
 AGENT_URL: str = os.getenv('OLLAMA_HOST', 'localhost:11434')
 OLLAMA_MODEL: str = str(os.getenv('OLLAMA_MODEL', 'qwen3.5:0.8b'))
-ENABLE_THINKING: bool = os.getenv('ENABLE_THINKING', "False") == "True"
+ENABLE_THINKING: bool = os.getenv("ENABLE_THINKING", "false").lower() == "true"
+
 OLLAMA_CLIENT = ChatOllama(base_url=AGENT_URL,
                            reasoning=ENABLE_THINKING,
-                           model=OLLAMA_MODEL)
-SINGLE_AGENT = None
+                           model=OLLAMA_MODEL,
+                           temperature=0.2)
 
-ENABLE_THINKING = os.getenv("ENABLE_THINKING", "false").lower() == "true"
+SINGLE_AGENT = None
 MEDIA_IN = os.getenv("MEDIA_IN", Path(BASE_DIR, "media"))
 
+print("Running Model %s", OLLAMA_MODEL)
 # Application definition
 
 INSTALLED_APPS = [

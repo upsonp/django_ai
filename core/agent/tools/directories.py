@@ -13,78 +13,6 @@ logger = logging.getLogger(f"ollama.{__name__}")
 
 
 @tool
-def read_text_file_structured(path: str, max_chars: int = 200_000, tail: bool = False,
-                              encoding: str | None = None) -> dict:
-    """
-    Read a plain-text file with safety limits and return a structured dict.
-
-    Args:
-        path: file path
-        max_chars: max characters to return (truncates if larger)
-        tail: if True, return the last max_chars of the file instead of the head
-        encoding: optional encoding to use; if None, tries utf-8 with errors='replace'
-
-    Returns:
-        {
-          "status": "ok" | "error",
-          "path": "<abs path>",
-          "size": <int bytes>,
-          "encoding": "<used encoding>",
-          "truncated": <bool>,
-          "content": "<string>",
-          "error": "<message>"  # only if status == "error"
-        }
-    """
-    try:
-        p = Path(path)
-        logger.debug("reading file: %s", path)
-        if not p.is_file():
-            return {"status": "error", "error": f"Not a file: {path}"}
-
-        size = p.stat().st_size
-        used_encoding = encoding or "utf-8"
-
-        # Read in binary and decode safely to avoid crashes on bad encodings.
-        with open(p, "rb") as f:
-            if not tail:
-                raw = f.read(max_chars * 4 + 1)  # read a bit more to be safe for multibyte chars
-            else:
-                # seek to near end
-                to_read = min(size, max_chars * 4 + 1)
-                f.seek(max(0, size - to_read))
-                raw = f.read(to_read)
-
-        try:
-            text = raw.decode(used_encoding, errors="strict")
-        except Exception:
-            # fall back to replacing undecodable bytes
-            text = raw.decode(used_encoding, errors="replace")
-
-        # If we read more bytes than max_chars (account for multibyte decode), truncate by characters
-        if len(text) > max_chars:
-            if tail:
-                content = text[-max_chars:]
-            else:
-                content = text[:max_chars]
-            truncated = True
-        else:
-            content = text
-            truncated = (size > len(content))
-
-        return {
-            "status": "ok",
-            "path": str(p.resolve()),
-            "size": size,
-            "encoding": used_encoding,
-            "truncated": truncated,
-            "content": content,
-        }
-    except Exception as e:
-        logger.exception("read_text_file_structured error")
-        return {"status": "error", "error": str(e)}
-
-
-@tool
 def read_excel_file(
         path: str,
         sheet: Optional[int | str] = 0,
@@ -539,8 +467,6 @@ def list_mission_directories(mission: str) -> dict:
         dict: dictionary of elements or error messages
     """
     try:
-        page_size: int = 10
-
         logger.debug("MEDIA_IN dir: %s", settings.MEDIA_IN)
         media_root = Path(settings.MEDIA_IN).resolve()
         root = (media_root / mission).resolve()
@@ -622,3 +548,76 @@ def list_mission_files(mission: str, page: int = 0) -> str:
     except Exception as e:
         logger.exception("listing path: %s", str(e))
         return {"status": "error", "error": str(e)}
+
+
+@tool
+def open_text_file(path: str, max_chars: int = 200_000, tail: bool = False,
+                              encoding: str | None = None) -> dict:
+    """
+    Read a plain-text file such as (.log, .csv, .dat) with safety limits and return a structured dict.
+
+    Args:
+        path: file path
+        max_chars: max characters to return (truncates if larger)
+        tail: if True, return the last max_chars of the file instead of the head
+        encoding: optional encoding to use; if None, tries utf-8 with errors='replace'
+
+    Returns:
+        {
+          "status": "ok" | "error",
+          "path": "<abs path>",
+          "size": <int bytes>,
+          "encoding": "<used encoding>",
+          "truncated": <bool>,
+          "content": "<string>",
+          "error": "<message>"  # only if status == "error"
+        }
+    """
+    try:
+        p = Path(path)
+        logger.debug("reading file: %s", path)
+        if not p.is_file():
+            return {"status": "error", "error": f"Not a file: {path}"}
+
+        size = p.stat().st_size
+        used_encoding = encoding or "utf-8"
+
+        # Read in binary and decode safely to avoid crashes on bad encodings.
+        with open(p, "rb") as f:
+            if not tail:
+                raw = f.read(max_chars * 4 + 1)  # read a bit more to be safe for multibyte chars
+            else:
+                # seek to near end
+                to_read = min(size, max_chars * 4 + 1)
+                f.seek(max(0, size - to_read))
+                raw = f.read(to_read)
+
+        try:
+            text = raw.decode(used_encoding, errors="strict")
+        except Exception:
+            # fall back to replacing undecodable bytes
+            text = raw.decode(used_encoding, errors="replace")
+
+        # If we read more bytes than max_chars (account for multibyte decode), truncate by characters
+        if len(text) > max_chars:
+            if tail:
+                content = text[-max_chars:]
+            else:
+                content = text[:max_chars]
+            truncated = True
+        else:
+            content = text
+            truncated = (size > len(content))
+
+        return {
+            "status": "ok",
+            "path": str(p.resolve()),
+            "size": size,
+            "encoding": used_encoding,
+            "truncated": truncated,
+            "content": content,
+        }
+    except Exception as e:
+        logger.exception("read_text_file_structured error")
+        return {"status": "error", "error": str(e)}
+

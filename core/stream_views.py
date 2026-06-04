@@ -14,7 +14,10 @@ from django.conf import settings
 from langchain_core.messages import HumanMessage, AIMessage
 
 from django.urls import reverse_lazy
+from langchain_core.stores import InMemoryStore
+from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.errors import InvalidUpdateError
+from langgraph.types import Command
 
 from markdown import markdown  # pip install markdown
 
@@ -84,17 +87,6 @@ def _clean_message(string_buffer: str):
     html = clean_thinking_html.replace('\n', '')
     return html
 
-def get_history(request, agent):
-    thread = get_thread()
-    config = {"configurable": {"thread_id": thread.thread_id}}
-
-    # Get the latest snapshot of the state
-    state = agent.get_state(config)
-
-    # Access the 'messages' list from the state values
-    # Note: Ensure the key 'messages' matches what you defined in your State schema
-    return state.values.get("messages", [])
-
 
 def _stream_output(target, message, swap="beforeend scroll:bottom"):
     return f"<hx-partial hx-target=\"#div_id_{target}\" hx-swap=\"{swap}\">{message}</hx-partial>"
@@ -157,57 +149,9 @@ def _flush_buffer(tag, buffer):
     yield f'data: {_stream_output(f"{tag}_content", MESSAGE_SPACER)}\n\n'
     yield f'data: {_stream_output(f"{tag}_stream", "", "innerHTML")}\n\n'
 
-
-def _async_to_sync(async_iter, max_queue_size=1000):
-    """
-    Run an async generator in a background thread and yield items synchronously.
-    Stops when the async generator finishes or raises.
-    """
-    q: "queue.Queue" = queue.Queue(maxsize=max_queue_size)
-    sentinel = object()
-
-    async def runner():
-        try:
-            async for item in async_iter:
-                q.put(item)
-        except Exception as e:
-            # Put exception to queue to raise it in consumer
-            q.put(e)
-        finally:
-            q.put(sentinel)
-
-    def run_loop():
-        try:
-            asyncio.run(runner())
-        except Exception as e:
-            # If the runner fails to start, ensure the consumer gets something
-            q.put(e)
-            q.put(sentinel)
-
-    t = threading.Thread(target=run_loop, daemon=True)
-    t.start()
-
-    while True:
-        item = q.get()
-        if item is sentinel:
-            break
-        if isinstance(item, Exception):
-            # re-raise in consumer context
-            raise item
-        yield item
-
-
 def _stream_raw(stream):
     text_buf = ""
     thinking_buf = ""
-
-    logger.info("Starting _stream_raw; stream repr=%r type=%s is_async=%s is_gen=%s has_interleave=%s",
-                stream, type(stream), inspect.isasyncgen(stream), inspect.isgenerator(stream),
-                hasattr(stream, "interleave"))
-
-    if inspect.isasyncgen(stream):
-        logger.info("Detected async generator, wrapping with _async_to_sync")
-        stream = _async_to_sync(stream)
 
     iterator = iter(stream)
     while True:
@@ -335,7 +279,7 @@ def _client_stream(stream):
     yield f'data: <hx-partial hx-target="#div_id_text_spinner" hx-swap="innerHTML"></hx-partial>\n\n'
 
 def _process_content_message_history(request):
-    unprocessed_messages = [msg.content for msg in get_history(request, get_agent()) if (type(msg) is HumanMessage or type(msg) is AIMessage)]
+    unprocessed_messages = [msg.content for msg in get_history() if (type(msg) is HumanMessage or type(msg) is AIMessage)]
     messages = [{'html':msg if type(msg)==str else (_clean_message(msg[0]['text']) + MESSAGE_SPACER), 'role':'user' if type(msg)==str else 'ai'}
                 for msg in unprocessed_messages if (type(msg)==str or (type(msg)==list and msg[0]['type']=='text'))]
     return messages
@@ -360,9 +304,14 @@ class ChatThreads:
 
 
 def get_thread():
-    if not (thread := ChatThread.objects.first()):
+    if (thread := ChatThread.objects.last()) is None:
         thread = ChatThread.objects.create(thread_id=str(uuid.uuid4()))
+
     return thread
+
+def get_config() -> dict:
+    thread = get_thread()
+    return {"configurable": {"thread_id": thread.thread_id}}
 
 def start_stream(request):
     chat_message = request.POST.get('chat_message', "") or ""
@@ -372,22 +321,36 @@ def start_stream(request):
     msg = HumanMessage(content=chat_message)
 
     # Pass this config into stream_events
-    thread = get_thread()
-    config = {"configurable": {"thread_id": thread.thread_id}}
+    config = get_config()
 
     stream = get_agent().stream_events({"messages": msg}, version='v3', config=config)
     return StreamingHttpResponse(_client_stream(stream), content_type="text/event-stream")
 
 
-def clear_history(request):
-    thread = get_thread()
-    config = {"configurable": {"thread_id": thread.thread_id}}
+def get_history():
+    config = get_config()
 
+    # Get the latest snapshot of the state
+    state = get_agent().get_state(config)
+
+    # Access the 'messages' list from the state values
+    # Note: Ensure the key 'messages' matches what you defined in your State schema
+    return state.values.get("messages", [])
+
+
+def clear_history(request):
     # Explicitly clear the state
     try:
+        thread = ChatThread.objects.first()
+        thread.thread_id = str(uuid.uuid4())
+        thread.save()
+
+        agent = get_agent()
+        config = get_config()
         # Let the agent/library pick the appropriate node automatically.
-        get_agent().checkpointer.delete_thread(get_thread().thread_id)
-        logger.info("Cleared agent messages for thread %s", thread.thread_id)
+
+        agent.update_state(config, Command(update={"messages": []}), as_node="__start__")
+        logger.info("Cleared agent messages for thread %s", str(config))
     except InvalidUpdateError as ex:
         # Log full exception for debugging
         logger.exception("Failed to clear agent history: %s", ex)
@@ -405,7 +368,7 @@ def clear_agent_history(request):
 
 def post_message(request):
     """ post the last user message to the Chat area """
-    message = get_history(request, get_agent())
+    message = get_history()
     if len(message) > 0:
         message = message[-1]
 

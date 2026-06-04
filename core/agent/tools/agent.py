@@ -7,17 +7,17 @@ from langchain.agents import create_agent
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import StateT
 from langchain_core.tools import tool
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.memory import MemorySaver, InMemorySaver
 from langgraph.runtime import Runtime
 from langgraph.typing import ContextT
+from twisted.web.client import Agent
 
 from core.agent.tools import directories
 
 import logging
 
 logger = logging.getLogger(f"ollama.{__name__}")
-memory = MemorySaver()
-
+memory = InMemorySaver()
 
 class AgentErrorLogger(AgentMiddleware):
     def after_agent(
@@ -35,7 +35,8 @@ SYSTEM_BLOCK_RE = re.compile(r'SYSTEM\s*"""\s*(.*?)\s*"""', re.DOTALL | re.IGNOR
 
 def get_agent_tools() -> list[Callable]:
     return [
-        directories.list_missions, directories.list_mission_directories, directories.list_mission_files
+        directories.list_missions, directories.list_mission_directories, directories.list_mission_files,
+        directories.open_text_file
     ]
 
 def get_agent():

@@ -21,5 +21,5 @@ class TodoItem(models.Model):
         ordering = ['priority']
 
 class ChatThread(models.Model):
-    thread_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    thread_id = models.UUIDField(default=uuid.uuid4, editable=False)
     created_at = models.DateTimeField(auto_now_add=True)
